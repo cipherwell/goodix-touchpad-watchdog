@@ -1,0 +1,22 @@
+# /etc/libinput/local-overrides.quirks
+#
+# Local libinput overrides. Read by libinput AFTER the system quirks in
+# /usr/share/libinput/*.quirks. This file survives libinput package upgrades
+# (the system files don't).
+#
+# Format: see /usr/share/libinput/30-vendor-goodix.quirks for examples,
+# or `man 5 libinput.quirks`.
+
+# Dell XPS 15 9510 / Precision 5560 - Goodix DLL0945:00 04F3:311C touchpad.
+# Reasonable defaults; the touchpad firmware is at 0c (the "fixed" version)
+# and the bus is policed by goodix-touchpad-watchdog.timer.
+#
+[Dell XPS 15 9510 Touchpad]
+MatchBus=i2c
+MatchVendor=0x04F3
+MatchProduct=0x311C
+MatchUdevType=touchpad
+AttrResolutionHint=32x32
+AttrPressureRange=10:8
+AttrPalmSizeThreshold=900
+AttrPalmPressureThreshold=130

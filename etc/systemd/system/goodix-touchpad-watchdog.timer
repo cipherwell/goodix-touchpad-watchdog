@@ -1,0 +1,13 @@
+[Unit]
+Description=Run goodix-touchpad-watchdog every 30s
+Documentation=https://github.com/cipherwell/goodix-touchpad-watchdog
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=goodix-touchpad-watchdog.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

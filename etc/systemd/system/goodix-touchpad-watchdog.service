@@ -1,0 +1,10 @@
+[Unit]
+Description=Goodix touchpad i2c-hid rebind watchdog
+Documentation=https://github.com/cipherwell/goodix-touchpad-watchdog
+After=systemd-journald.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/goodix-touchpad-watchdog
+# Runs as root to write sysfs and read the state file in /run.

@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# goodix-touchpad-watchdog
+#
+# Rebind the i2c-hid touchpad when its bus corrupts. Workaround for the
+# Goodix DLL0945:00 04F3:311C (and similar) touchpad on Dell XPS 15 9510
+# and related laptops, where the i2c-hid driver misinterprets the device's
+# 0xff "no data" sentinel as an error and gets into a confused state.
+#
+# Usage (normally invoked by systemd):
+#   goodix-touchpad-watchdog           # check + act
+#   DRY_RUN=1 goodix-touchpad-watchdog  # check, log only
+#   VERBOSE=1 goodix-touchpad-watchdog  # log every check
+#
+# Tunables: /etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf
+
+set -euo pipefail
+
+# --- defaults (override in /etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf) ---
+WINDOW_SECONDS=1800        # look at the last 30 min of kernel log
+THRESHOLD=10               # rebind when any 5s bucket has >= N errors
+COOLDOWN_SECONDS=300       # minimum gap between rebinds (5 min)
+DEVICE="i2c-DLL0945:00"    # i2c-hid client name to rebind
+DRIVER_PATH="/sys/bus/i2c/drivers/i2c_hid_acpi"
+STATE_FILE="/run/goodix-touchpad-watchdog.last"
+LOG_TAG="goodix-touchpad-watchdog"
+DRY_RUN="${DRY_RUN:-0}"
+VERBOSE="${VERBOSE:-0}"
+
+CONF_FILE="/etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf"
+if [[ -f "$CONF_FILE" ]]; then
+  # shellcheck disable=SC1090
+  . "$CONF_FILE"
+fi
+
+# Use EPOCHSECONDS (bash 5.0+) to avoid set -u issues with function lookups
+# in arithmetic contexts. Fall back to date +%s if unavailable.
+if [[ -z "${EPOCHSECONDS:-}" ]]; then
+  get_now() { date +%s; }
+else
+  get_now() { echo "$EPOCHSECONDS"; }
+fi
+
+log()  { logger -t "$LOG_TAG" "$*"; printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
+is_true() { case "${1:-0}" in 1|true|TRUE|yes|YES|on|ON) return 0;; *) return 1;; esac; }
+
+# --- cooldown check ---
+NOW=$(get_now)
+if [[ -f "$STATE_FILE" ]]; then
+  last=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
+  if (( NOW - last < COOLDOWN_SECONDS )); then
+    is_true "$VERBOSE" && log "in cooldown, skipping (last rebind $((NOW - last))s ago)"
+    exit 0
+  fi
+fi
+
+# --- count recent errors per 5-second bucket ---
+mapfile -t lines < <(journalctl -k --since "-${WINDOW_SECONDS}s" --no-pager -q -o short 2>/dev/null \
+  | grep -F "i2c_hid_acpi ${DEVICE}: device returned incorrect" \
+  | awk '{print $1, $2, $3}' || true)
+
+(( ${#lines[@]} == 0 )) && exit 0
+
+max_bucket=$(printf '%s\n' "${lines[@]}" | python3 -c '
+import sys, datetime
+buckets = {}
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        d = datetime.datetime.strptime(f"2026 {line}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        continue
+    b = int(d.timestamp()) // 5
+    buckets[b] = buckets.get(b, 0) + 1
+print(max(buckets.values()) if buckets else 0)
+')
+
+if (( max_bucket >= THRESHOLD )); then
+  if is_true "$DRY_RUN"; then
+    log "DRY-RUN: would rebind $DEVICE (burst $max_bucket errors in 5s)"
+    exit 0
+  fi
+  log "burst detected: $max_bucket errors in 5s (threshold $THRESHOLD) - rebinding $DEVICE"
+  if [[ -w "$DRIVER_PATH/unbind" ]] && [[ -w "$DRIVER_PATH/bind" ]]; then
+    if echo "$DEVICE" > "$DRIVER_PATH/unbind" 2>/tmp/goodix-tw.unbind.err \
+       && sleep 1 \
+       && echo "$DEVICE" > "$DRIVER_PATH/bind" 2>/tmp/goodix-tw.bind.err; then
+      echo "$NOW" > "$STATE_FILE"
+      log "rebind OK"
+    else
+      log "rebind FAILED: unbind=$(cat /tmp/goodix-tw.unbind.err 2>/dev/null) bind=$(cat /tmp/goodix-tw.bind.err 2>/dev/null)"
+    fi
+  else
+    log "rebind skipped: sysfs not writable (driver gone? device gone?)"
+  fi
+else
+  is_true "$VERBOSE" && log "ok: max bucket $max_bucket errors (below $THRESHOLD)"
+fi
