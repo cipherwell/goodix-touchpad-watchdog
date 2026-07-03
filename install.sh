@@ -5,15 +5,21 @@
 # starts the timer. Safe to re-run.
 #
 # Usage:
-#   sudo ./install.sh             # install + start
-#   sudo ./install.sh --dry-run   # show what would be done
+#   sudo ./install.sh                 # install + start
+#   sudo ./install.sh --dry-run       # show what would be done
+#   sudo ./install.sh --yes           # auto-answer prompts (e.g. CI)
 
 set -euo pipefail
 
 DRY_RUN=0
-if [[ "${1:-}" == "--dry-run" ]] || [[ "${1:-}" == "-n" ]]; then
-  DRY_RUN=1
-fi
+ASSUME_YES=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run|-n) DRY_RUN=1 ;;
+    --yes|-y)     ASSUME_YES=1 ;;
+    *) echo "ERROR: unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
 
 # --- locate ourselves ---
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -61,22 +67,56 @@ if [[ -z "$DETECTED_DEVICE" ]]; then
   echo "         If your touchpad is different, edit DEVICE in" >&2
   echo "         /etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf after install." >&2
   echo >&2
-  read -rp "Continue anyway? [y/N] " ans
-  if [[ ! "$ans" =~ ^[Yy]$ ]]; then
-    echo "Aborted."
-    exit 1
+  if (( ASSUME_YES )); then
+    echo "Continuing (--yes was passed)."
+  else
+    read -rp "Continue anyway? [y/N] " ans
+    if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 1
+    fi
   fi
 else
   echo "Detected touchpad: $DETECTED_DEVICE"
 fi
 
-# --- helper ---
+# --- helpers ---
 run() {
   if (( DRY_RUN )); then
     printf '  [dry-run] %s\n' "$*"
   else
     "$@"
   fi
+}
+
+# systemctl is only meaningful when systemd is actually running. In
+# containers, chroots, or minimal environments it can fail with
+# "Failed to connect to bus" or "System has not been booted with
+# systemd". Treat that as a warning, not a fatal error — the files
+# are still installed correctly and the user can enable the timer
+# themselves once they're on a booted systemd system.
+systemctl_run() {
+  if (( DRY_RUN )); then
+    printf '  [dry-run] systemctl %s\n' "$*"
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    echo "  WARNING: systemctl not found, skipping: $*"
+    return 0
+  fi
+  if ! systemctl "$@" 2>/tmp/install-sh-systemctl-err.$$; then
+    err=$(cat /tmp/install-sh-systemctl-err.$$ 2>/dev/null)
+    rm -f /tmp/install-sh-systemctl-err.$$
+    if [[ "$err" == *"Failed to connect to bus"* ]] \
+       || [[ "$err" == *"System has not been booted with systemd"* ]] \
+       || [[ "$err" == *"Connection refused"* ]]; then
+      echo "  WARNING: systemd is not running here, skipping: systemctl $*"
+      return 0
+    fi
+    echo "  ERROR: systemctl $* failed: $err" >&2
+    return 1
+  fi
+  rm -f /tmp/install-sh-systemctl-err.$$
 }
 
 # --- install ---
@@ -107,9 +147,9 @@ fi
 
 # --- start ---
 echo "Enabling and starting the timer..."
-run systemctl daemon-reload
-run systemctl enable goodix-touchpad-watchdog.timer
-run systemctl restart goodix-touchpad-watchdog.timer
+systemctl_run daemon-reload
+systemctl_run enable goodix-touchpad-watchdog.timer
+systemctl_run restart goodix-touchpad-watchdog.timer
 
 if (( DRY_RUN )); then
   echo

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: ./
+          additional_files: install.sh uninstall.sh usr/local/sbin/goodix-touchpad-watchdog
+          ignore_paths: docs/
+
+  install-uninstall:
+    name: Install + uninstall (Arch, real paths)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap Arch container
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm --needed \
+            bash \
+            coreutils \
+            systemd \
+            grep \
+            gawk \
+            python \
+            procps-ng \
+            which
+
+      - name: Real install + validate file layout
+        run: |
+          set -euo pipefail
+          chmod +x install.sh uninstall.sh
+          ./install.sh --yes
+          test -f /usr/local/sbin/goodix-touchpad-watchdog
+          test -x /usr/local/sbin/goodix-touchpad-watchdog
+          test -f /etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf
+          test -f /etc/systemd/system/goodix-touchpad-watchdog.service
+          test -f /etc/systemd/system/goodix-touchpad-watchdog.timer
+          test -f /etc/libinput/local-overrides.quirks
+          echo "all expected files installed"
+
+      - name: Run watchdog once with DRY_RUN=1 (no rebind, no error burst)
+        run: |
+          set -euo pipefail
+          DRY_RUN=1 /usr/local/sbin/goodix-touchpad-watchdog
+          echo "watchdog ran cleanly under DRY_RUN=1"
+
+      - name: Real uninstall + validate removal
+        run: |
+          set -euo pipefail
+          ./uninstall.sh
+          test ! -f /usr/local/sbin/goodix-touchpad-watchdog
+          test ! -d /etc/goodix-touchpad-watchdog
+          test ! -f /etc/systemd/system/goodix-touchpad-watchdog.service
+          test ! -f /etc/systemd/system/goodix-touchpad-watchdog.timer
+          echo "uninstall removed all expected files"

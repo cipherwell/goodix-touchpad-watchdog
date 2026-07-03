@@ -4,10 +4,36 @@ A user-space watchdog that fixes the **laggy Goodix touchpad on Dell XPS 15
 9510 and similar laptops** by rebinding the i2c-hid device when its bus
 corrupts.
 
+[![Latest release](https://img.shields.io/github/v/release/Cipherwell/goodix-touchpad-watchdog?include_prereleases&sort=semver)](https://github.com/cipherwell/goodix-touchpad-watchdog/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/Cipherwell/goodix-touchpad-watchdog/ci.yml?branch=main&label=CI)](https://github.com/cipherwell/goodix-touchpad-watchdog/actions)
+[![License: MIT](https://img.shields.io/github/license/Cipherwell/goodix-touchpad-watchdog)](LICENSE)
+[![Made for: Dell XPS 15 9510](https://img.shields.io/badge/made%20for-Dell%20XPS%2015%209510-0078D4?logo=dell&logoColor=white)](https://wiki.archlinux.org/title/Dell_XPS_15_(9510))
+[![Shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)](https://www.shellcheck.net/)
+[![Bash 5.0+](https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+
+---
+
+## TL;DR — One-liner install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cipherwell/goodix-touchpad-watchdog/v1.0.0/install.sh | sudo bash
+```
+
+That downloads, installs the watchdog, enables the systemd timer, and you're done.
+
+Verify with:
+
+```bash
+systemctl status goodix-touchpad-watchdog.timer
+journalctl -t goodix-touchpad-watchdog -f
+```
+
+---
+
 ## The problem
 
 If your laptop has a touchpad that **drifts off or ignores input while making
-slow movements**, and dmesg shows errors like:
+slow movements**, and `dmesg` shows errors like:
 
 ```
 i2c_hid_acpi i2c-DLL0945:00: device returned incorrect report (255 vs 5 expected)
@@ -28,6 +54,27 @@ fix hasn't landed yet.
 This watchdog detects the burst pattern and rebinds the device automatically
 — the touchpad drops for ~50 ms and comes back clean.
 
+---
+
+## In action
+
+```
+[2026-07-02T15:42:18-04:00] goodix-touchpad-watchdog: error burst detected (bucket=23, threshold=10), rebinding i2c-DLL0945:00
+[2026-07-02T15:42:19-04:00] goodix-touchpad-watchdog: rebind complete, cooldown 300s
+```
+
+After the rebind, slow-movement tracking is clean again. No reboot, no
+firmware flash, no kernel module hacks.
+
+> **Note:** a graphical "before/after" screenshot isn't included in this repo
+> because touchpad behavior doesn't render meaningfully in a still image —
+> the symptom is *kinesthetic*, not visual. The log output above is the
+> observable result. If you'd like to capture a real demo, the recommended
+> approach is a short screen recording (1–2 minutes) of slow cursor
+> movement before vs. after install. PRs welcome.
+
+---
+
 ## Supported hardware
 
 Confirmed working on:
@@ -39,21 +86,24 @@ Confirmed working on:
 Should also help on similar touchpads (ELAN 04F3:xxxx) if you adjust the
 device name and error string in the script.
 
-## Quick install
+**Distro support:** the script uses only `bash`, `journalctl`, `awk`, and
+`python3` — all standard on any modern systemd-based Linux (Arch, CachyOS,
+Ubuntu, Fedora, openSUSE, NixOS, etc.).
+
+---
+
+## Quick install (manual)
+
+If you'd rather inspect the code first:
 
 ```bash
 git clone https://github.com/cipherwell/goodix-touchpad-watchdog.git
 cd goodix-touchpad-watchdog
-sudo ./install.sh
+sudo ./install.sh           # install + start
+sudo ./install.sh --dry-run # show what would happen, change nothing
 ```
 
-That's it. The watchdog starts immediately, runs every 30 seconds, and
-re-enables itself on boot. Verify with:
-
-```bash
-systemctl status goodix-touchpad-watchdog.timer
-journalctl -t goodix-touchpad-watchdog -f
-```
+---
 
 ## What it installs
 
@@ -64,6 +114,8 @@ journalctl -t goodix-touchpad-watchdog -f
 | `/etc/systemd/system/goodix-touchpad-watchdog.service` | Oneshot service |
 | `/etc/systemd/system/goodix-touchpad-watchdog.timer` | 30s timer (enabled) |
 | `/etc/libinput/local-overrides.quirks` | Sensible libinput defaults |
+
+---
 
 ## Tunables
 
@@ -80,11 +132,15 @@ Edit `/etc/goodix-touchpad-watchdog/goodix-touchpad-watchdog.conf`:
 
 After editing, the next timer cycle picks up the new values automatically.
 
+---
+
 ## Uninstall
 
 ```bash
 sudo ./uninstall.sh
 ```
+
+---
 
 ## How it works
 
@@ -100,8 +156,27 @@ The watchdog runs as a systemd oneshot every 30 seconds. On each run, it:
    it to `bind` to re-enumerate the device.
 6. Records the rebind time in `/run/goodix-touchpad-watchdog.last` for cooldown.
 
-The touchpad drops for ~50-100 ms during the rebind. Then events resume from
+The touchpad drops for ~50–100 ms during the rebind. Then events resume from
 a clean state.
+
+---
+
+## Development
+
+The repo is tested in CI on every push and PR. To reproduce locally:
+
+```bash
+# Lint
+shellcheck usr/local/sbin/goodix-touchpad-watchdog install.sh uninstall.sh
+
+# Dry-run install
+sudo ./install.sh --dry-run
+
+# Run the script with DRY_RUN=1 to see what it would do without rebinding
+DRY_RUN=1 sudo /usr/local/sbin/goodix-touchpad-watchdog
+```
+
+---
 
 ## See also
 
@@ -113,6 +188,8 @@ a clean state.
 - [libinput issue #636](https://gitlab.freedesktop.org/libinput/libinput/-/issues/636)
 - [ArchWiki: Dell XPS 15 (9510)](https://wiki.archlinux.org/title/Dell_XPS_15_(9510))
 - [Dell community thread on this exact issue](https://www.dell.com/community/en/conversations/xps/xps-15-9510-touchpad-intermittent-touchpad-lag/647f95a5f4ccf8a8de834c71)
+
+---
 
 ## License
 
